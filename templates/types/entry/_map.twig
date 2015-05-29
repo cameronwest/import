@@ -1,5 +1,5 @@
 {% set entrytypes = craft.sections.getSectionById(import.elementvars.section).getEntryTypes() %}
-
+    
 <p>{{ 'Choose the destination fields for your imported data. "{title}" is always required.'|t({
     title: entrytypes[0].titleLabel
 }) }}</p>
@@ -23,7 +23,7 @@
                 <div class="heading">
                     <label>{{ column }}</label>
                     <div class="instructions">
-                        <p>{{ "will be imported into:"|t }}</p>
+                        <p>{{ "will be imported into:"|t }}</p>                
                     </div>
                 </div>
             </div>
@@ -45,14 +45,48 @@
                             <option value="expiryDate"{% if column|lower == 'expirydate' or column|lower == 'enddate' %} selected{% endif %}>{{ "Expiry Date"|t }}</option>
                             <option value="enabled"{% if column|lower == 'enabled' %} selected{% endif %}>{{ "Enabled"|t }}</option>
                     {% endif %}
+
                     {% for tab in craft.fields.getLayoutById(entrytype.fieldLayoutId).getTabs() %}
                             <optgroup label="{{ tab.name }}">
+
                         {% for field in tab.getFields() %}
                             {% set f = field.getField() %}
-                            <option value="{{ f.handle }}"{% if column|lower == f.name|lower or column|lower == f.handle|lower %} selected{% endif %}>{{ f.name }}{% if f.required %} *{% endif %}</option>
+
+                            {% if f.type == 'Calendars_EventData' %}
+
+                                <option value="{{ f.handle }}[startDate][date]">
+                                    Start Date
+                                    {% if f.required %} *{% endif %}
+                                </option>
+                                <option value="{{ f.handle }}[startDate][time]">
+                                    Start Time
+                                    {% if f.required %} *{% endif %}
+                                </option>
+                                <option value="{{ f.handle }}[endDate][date]">
+                                    End Date
+                                    {% if f.required %} *{% endif %}
+                                </option>
+                                <option value="{{ f.handle }}[endDate][time]">
+                                    End Time
+                                    {% if f.required %} *{% endif %}
+                                </option>
+
+                            {% else %}
+
+                                <option value="{{ f.handle }}"
+                                    {% if column|lower == f.name|lower or column|lower == f.handle|lower %}
+                                        selected
+                                    {% endif %}>
+                                    {{ f.name }}
+                                    {% if f.required %} *{% endif %}
+                                </option>
+
+                            {% endif %}
                         {% endfor %}
+
                             </optgroup>
                     {% endfor %}
+
                 {% endfor %}
                         </select>
                     </div>

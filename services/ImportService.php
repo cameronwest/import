@@ -46,13 +46,15 @@ class ImportService extends BaseApplicationComponent
      *
      * @return array
      */
-    public function data($file)
+    public function data($file, $skip = true)
     {
         // Open CSV file
         $data = $this->_open($file);
 
         // Skip first row
-        array_shift($data);
+        if($skip) {
+            array_shift($data);
+        }
 
         // Return all data
         return $data;
@@ -67,7 +69,7 @@ class ImportService extends BaseApplicationComponent
      */
     public function row($row, array $data, $settings)
     {
-        // See if map and data match (could not be due to malformed csv)
+        // See if map and data match (could be due to malformed csv)
         if (count($settings['map']) != count($data)) {
 
             // Log errors when unsuccessful
@@ -82,7 +84,10 @@ class ImportService extends BaseApplicationComponent
         }
 
         // Map data to fields
+        /* Let's be a bit more careful about this
         $fields = array_combine($settings['map'], $data);
+        */
+        $fields = $this->_map_data($settings['map'], $data);
 
         // If set, remove fields that will not be imported
         if (isset($fields['dont'])) {
@@ -174,6 +179,27 @@ class ImportService extends BaseApplicationComponent
             array_walk($fields, function (&$data, $handle) {
                 return craft()->plugins->call('registerImportOperation', array(&$data, $handle));
             });
+
+            $newFields = array();
+            foreach($fields as $index => $value) {
+                if(stristr($index, '[')) {
+                    $bracket = strpos($index, '[');
+                    $fieldName = substr($index, 0, $bracket);
+                    if(isset($newFields[$fieldName])) {
+                        $newFields[$fieldName] = array_merge_recursive($newFields[$fieldName], $value);
+                    } else {
+                        $newFields[$fieldName] = $value;
+                    }
+                } else {
+                    $newFields[$index] = $value;
+                }
+            }
+
+            if(isset($newFields['eventData']))
+                $newFields['eventData']['recurrenceRules'] = json_encode(array('rules' => array()));
+
+            $fields = $newFields;
+
         } catch (Exception $e) {
 
             // Something went terribly wrong, assume its only this row
@@ -213,6 +239,28 @@ class ImportService extends BaseApplicationComponent
         }
     }
 
+    /**
+     * Map fields to allow appending csv columns together
+     *
+     * @param array $map
+     * @param array $data
+     */
+    protected function _map_data($map, $data)
+    {
+        $mapped_data = array();
+        foreach($map as $column => $field) {
+            if(isset($data[$column])) {
+                if(isset($mapped_data[$field])) {
+                    $mapped_data[$field] .= '<br>' . $data[$column];
+                } else {
+                    $mapped_data[$field] = $data[$column];
+                }
+            }
+        }
+
+        return $mapped_data;
+    }
+    
     /**
      * Finish importing.
      *
@@ -286,6 +334,11 @@ class ImportService extends BaseApplicationComponent
         $data = StringHelper::convertToUTF8($data);
         $data = trim($data);
 
+        if (stristr($handle, 'eventData')) {
+            $subfield = $handle;
+            $handle = 'eventData';
+        }
+
         // Get field info
         $field = craft()->fields->getFieldByHandle($handle);
 
@@ -296,305 +349,361 @@ class ImportService extends BaseApplicationComponent
             switch ($field->type) {
 
                 case ImportModel::FieldTypeEntries:
-
-                    // No newlines allowed
-                    $data = str_replace("\n", '', $data);
-                    $data = str_replace("\r", '', $data);
-
-                    // Don't connect empty fields
-                    if (!empty($data)) {
-
-                        // Get field settings
-                        $settings = $field->getFieldType()->getSettings();
-
-                        // Get source id's for connecting
-                        $sectionIds = array();
-                        $sources = $settings->sources;
-                        if (is_array($sources)) {
-                            foreach ($sources as $source) {
-                                list($type, $id) = explode(':', $source);
-                                $sectionIds[] = $id;
-                            }
-                        }
-
-                        // Find matching element in sections
-                        $criteria = craft()->elements->getCriteria(ElementType::Entry);
-                        $criteria->sectionId = $sectionIds;
-                        $criteria->limit = $settings->limit;
-
-                        // Get search strings
-                        $search = ArrayHelper::stringToArray($data);
-
-                        // Ability to import multiple Assets at once
-                        $data = array();
-
-                        // Loop through keywords
-                        foreach ($search as $query) {
-
-                            // Search
-                            $criteria->search = $query;
-
-                            // Add to data
-                            $data = array_merge($data, $criteria->ids());
-                        }
-                    } else {
-
-                        // Return empty array
-                        $data = array();
-                    }
-
+                	$data = $this->handleEntryField($data, $field);
                     break;
 
                 case ImportModel::FieldTypeCategories:
-
-                    // Don't connect empty fields
-                    if (!empty($data)) {
-
-                        // Get field settings
-                        $settings = $field->getFieldType()->getSettings();
-
-                        // Get source id
-                        $source = $settings->source;
-                        list($type, $id) = explode(':', $source);
-
-                        // Get category data
-                        $category = new CategoryModel();
-                        $category->groupId = $id;
-
-                        // This we append before the slugified path
-                        $categoryUrl = str_replace('{slug}', '', $category->getUrlFormat());
-
-                        // Find matching elements in categories
-                        $criteria = craft()->elements->getCriteria(ElementType::Category);
-                        $criteria->groupId = $id;
-                        $criteria->limit = $settings->limit;
-
-                        // Get search strings
-                        $search = ArrayHelper::stringToArray($data);
-
-                        // Ability to import multiple Categories at once
-                        $data = array();
-
-                        // Loop through keywords
-                        foreach ($search as $query) {
-
-                            // Find matching element by URI (dirty, not all categories have URI's)
-                            $criteria->uri = $categoryUrl.$this->slugify($query);
-
-                            // Add to data
-                            $data = array_merge($data, $criteria->ids());
-                        }
-                    } else {
-
-                        // Return empty array
-                        $data = array();
-                    }
-
+                	$data = $this->handleCategoryField($data, $field);
                     break;
 
                 case ImportModel::FieldTypeAssets:
-
-                    // Don't connect empty fields
-                    if (!empty($data)) {
-
-                        // Get field settings
-                        $settings = $field->getFieldType()->getSettings();
-
-                        // Get source id's for connecting
-                        $sourceIds = array();
-                        $sources = $settings->sources;
-                        if (is_array($sources)) {
-                            foreach ($sources as $source) {
-                                list($type, $id) = explode(':', $source);
-                                $sourceIds[] = $id;
-                            }
-                        }
-
-                        // Find matching element in sources
-                        $criteria = craft()->elements->getCriteria(ElementType::Asset);
-                        $criteria->sourceId = $sourceIds;
-                        $criteria->limit = $settings->limit;
-
-                        // Get search strings
-                        $search = ArrayHelper::stringToArray($data);
-
-                        // Ability to import multiple Assets at once
-                        $data = array();
-
-                        // Loop through keywords
-                        foreach ($search as $query) {
-
-                            // Search
-                            $criteria->search = $query;
-
-                            // Add to data
-                            $data = array_merge($data, $criteria->ids());
-                        }
-                    } else {
-
-                        // Return empty array
-                        $data = array();
-                    }
-
+                	$data = $this->handleAssetField($data, $field);
                     break;
 
                 case ImportModel::FieldTypeUsers:
-
-                    // Don't connect empty fields
-                    if (!empty($data)) {
-
-                        // Get field settings
-                        $settings = $field->getFieldType()->getSettings();
-
-                        // Get group id's for connecting
-                        $groupIds = array();
-                        $sources = $settings->sources;
-                        if (is_array($sources)) {
-                            foreach ($sources as $source) {
-                                list($type, $id) = explode(':', $source);
-                                $groupIds[] = $id;
-                            }
-                        }
-
-                        // Find matching element in sources
-                        $criteria = craft()->elements->getCriteria(ElementType::User);
-                        $criteria->groupId = $groupIds;
-                        $criteria->limit = $settings->limit;
-
-                        // Get search strings
-                        $search = ArrayHelper::stringToArray($data);
-
-                        // Ability to import multiple Users at once
-                        $data = array();
-
-                        // Loop through keywords
-                        foreach ($search as $query) {
-
-                            // Search
-                            $criteria->search = $query;
-
-                            // Add to data
-                            $data = array_merge($data, $criteria->ids());
-                        }
-                    } else {
-
-                        // Return empty array
-                        $data = array();
-                    }
-
+                	$data = $this->handleUserField($data, $field);
                     break;
 
                 case ImportModel::FieldTypeTags:
-
-                    // Get field settings
-                    $settings = $field->getFieldType()->getSettings();
-
-                    // Get tag group id
-                    $source = $settings->getAttribute('source');
-                    list($type, $groupId) = explode(':', $source);
-
-                    $tags = ArrayHelper::stringToArray($data);
-                    $data = array();
-
-                    foreach ($tags as $tag) {
-
-                        // Find existing tag
-                        $criteria = craft()->elements->getCriteria(ElementType::Tag);
-                        $criteria->title = $tag;
-                        $criteria->groupId = $groupId;
-
-                        if (!$criteria->total()) {
-
-                            // Create tag if one doesn't already exist
-                            $newtag = new TagModel();
-                            $newtag->getContent()->title = $tag;
-                            $newtag->groupId = $groupId;
-
-                            // Save tag
-                            if (craft()->tags->saveTag($newtag)) {
-                                $tagArray = array($newtag->id);
-                            }
-                        } else {
-                            $tagArray = $criteria->ids();
-                        }
-
-                        // Add tags to data array
-                        $data = array_merge($data, $tagArray);
-                    }
-
+                	$data = $this->handleTagField($data, $field);
                     break;
 
                 case ImportModel::FieldTypeNumber:
-
-                    // Parse as number
-                    $data = LocalizationHelper::normalizeNumber($data);
-
-                    // Parse as float
-                    $data = floatval($data);
-
+                	$data = $this->handleNumberField($data);
                     break;
 
                 case ImportModel::FieldTypeDate:
-
-                    // Parse date from string
-                    $data = DateTimeHelper::formatTimeForDb(DateTimeHelper::fromString($data, craft()->timezone));
-
+                	$data = $this->handleDateField($data);
                     break;
 
                 case ImportModel::FieldTypeRadioButtons:
                 case ImportModel::FieldTypeDropdown:
-
-                    //get field settings
-                    $settings = $field->getFieldType()->getSettings();
-
-                    //get field options
-                    $options = $settings->getAttribute('options');
-
-                    // find matching option label
-                    $labelSelected = false;
-                    foreach ($options as $option) {
-                        if ($labelSelected) {
-                            continue;
-                        }
-
-                        if ($data == $option['label']) {
-                            $data = $option['value'];
-                            //stop looking after first match
-                            $labelSelected = true;
-                        }
-                    }
-
+                	$data = $this->handleSelectField($data, $field);
                     break;
 
                 case ImportModel::FieldTypeCheckboxes:
                 case ImportModel::FieldTypeMultiSelect:
-
-                    // Convert to array
-                    $data = ArrayHelper::stringToArray($data);
-
+                	$data = $this->handleMultiSelectField($data, $field);
                     break;
 
                 case ImportModel::FieldTypeLightSwitch:
-
-                    // Convert yes/no values to boolean
-                    switch ($data) {
-
-                        case Craft::t('Yes');
-                            $data = true;
-                            break;
-
-                        case Craft::t('No');
-                            $data = false;
-                            break;
-
-                    }
-
+                	$data = $this->handleLightSwitchField($data);
                     break;
 
+                case ImportModel::FieldTypeEventData:
+                    $data = $this->handleEventField($data, $subfield);
+                    break;
             }
         }
 
         return $data;
+    }
+
+    private function handleEntryField($data, $field)
+    {
+        // No newlines allowed
+        $data = str_replace("\n", '', $data);
+        $data = str_replace("\r", '', $data);
+
+        // Don't connect empty fields
+        if (!empty($data)) {
+
+            // Get field settings
+            $settings = $field->getFieldType()->getSettings();
+
+            // Get source id's for connecting
+            $sectionIds = array();
+            $sources = $settings->sources;
+            if (is_array($sources)) {
+                foreach ($sources as $source) {
+                    list($type, $id) = explode(':', $source);
+                    $sectionIds[] = $id;
+                }
+            }
+
+            // Find matching element in sections
+            $criteria = craft()->elements->getCriteria(ElementType::Entry);
+            $criteria->sectionId = $sectionIds;
+            $criteria->limit = $settings->limit;
+
+            // Get search strings
+            $search = ArrayHelper::stringToArray($data);
+
+            // Ability to import multiple Assets at once
+            $data = array();
+
+            // Loop through keywords
+            foreach ($search as $query) {
+
+                // Search
+                $criteria->search = $query;
+
+                // Add to data
+                $data = array_merge($data, $criteria->ids());
+            }
+        } else {
+
+            // Return empty array
+            $data = array();
+        }
+
+        return $data;
+    }
+
+    private function handleCategoryField($data, $field)
+    {
+        // Don't connect empty fields
+        if (!empty($data)) {
+
+            // Get field settings
+            $settings = $field->getFieldType()->getSettings();
+
+            // Get source id
+            $source = $settings->source;
+            list($type, $id) = explode(':', $source);
+
+            // Get category data
+            $category = new CategoryModel();
+            $category->groupId = $id;
+
+            // This we append before the slugified path
+            $categoryUrl = str_replace('{slug}', '', $category->getUrlFormat());
+
+            // Find matching elements in categories
+            $criteria = craft()->elements->getCriteria(ElementType::Category);
+            $criteria->groupId = $id;
+            $criteria->limit = $settings->limit;
+
+            // Get search strings
+            $search = ArrayHelper::stringToArray($data);
+
+            // Ability to import multiple Categories at once
+            $data = array();
+
+            // Loop through keywords
+            foreach ($search as $query) {
+
+                // Find matching element by URI (dirty, not all categories have URI's)
+                $criteria->uri = $categoryUrl.$this->slugify($query);
+
+                // Add to data
+                $data = array_merge($data, $criteria->ids());
+            }
+        } else {
+
+            // Return empty array
+            $data = array();
+        }
+
+        return $data;
+    }
+
+    private function handleAssetField($data, $field)
+    {
+        // Don't connect empty fields
+        if (!empty($data)) {
+
+            // Get field settings
+            $settings = $field->getFieldType()->getSettings();
+
+            // Get source id's for connecting
+            $sourceIds = array();
+            $sources = $settings->sources;
+            if (is_array($sources)) {
+                foreach ($sources as $source) {
+                    list($type, $id) = explode(':', $source);
+                    $sourceIds[] = $id;
+                }
+            }
+
+            // Find matching element in sources
+            $criteria = craft()->elements->getCriteria(ElementType::Asset);
+            $criteria->sourceId = $sourceIds;
+            $criteria->limit = $settings->limit;
+
+            // Get search strings
+            $search = ArrayHelper::stringToArray($data);
+
+            // Ability to import multiple Assets at once
+            $data = array();
+
+            // Loop through keywords
+            foreach ($search as $query) {
+
+                // Search
+                $criteria->search = $query;
+
+                // Add to data
+                $data = array_merge($data, $criteria->ids());
+            }
+        } else {
+
+            // Return empty array
+            $data = array();
+        }
+
+        return $data;
+    }
+
+    private function handleUserField($data, $field)
+    {
+        // Don't connect empty fields
+        if (!empty($data)) {
+
+            // Get field settings
+            $settings = $field->getFieldType()->getSettings();
+
+            // Get group id's for connecting
+            $groupIds = array();
+            $sources = $settings->sources;
+            if (is_array($sources)) {
+                foreach ($sources as $source) {
+                    list($type, $id) = explode(':', $source);
+                    $groupIds[] = $id;
+                }
+            }
+
+            // Find matching element in sources
+            $criteria = craft()->elements->getCriteria(ElementType::User);
+            $criteria->groupId = $groupIds;
+            $criteria->limit = $settings->limit;
+
+            // Get search strings
+            $search = ArrayHelper::stringToArray($data);
+
+            // Ability to import multiple Users at once
+            $data = array();
+
+            // Loop through keywords
+            foreach ($search as $query) {
+
+                // Search
+                $criteria->search = $query;
+
+                // Add to data
+                $data = array_merge($data, $criteria->ids());
+            }
+        } else {
+
+            // Return empty array
+            $data = array();
+        }
+
+        return $data;
+    }
+
+    private function handleTagField($data, $field)
+    {
+        // Get field settings
+        $settings = $field->getFieldType()->getSettings();
+
+        // Get tag group id
+        $source = $settings->getAttribute('source');
+        list($type, $groupId) = explode(':', $source);
+
+        $tags = ArrayHelper::stringToArray($data);
+        $data = array();
+
+        foreach ($tags as $tag) {
+
+            // Find existing tag
+            $criteria = craft()->elements->getCriteria(ElementType::Tag);
+            $criteria->title = $tag;
+            $criteria->groupId = $groupId;
+
+            if (!$criteria->total()) {
+
+                // Create tag if one doesn't already exist
+                $newtag = new TagModel();
+                $newtag->getContent()->title = $tag;
+                $newtag->groupId = $groupId;
+
+                // Save tag
+                if (craft()->tags->saveTag($newtag)) {
+                    $tagArray = array($newtag->id);
+                }
+            } else {
+                $tagArray = $criteria->ids();
+            }
+
+            // Add tags to data array
+            $data = array_merge($data, $tagArray);
+        }
+
+        return $data;
+    }
+
+    private function handleNumberField($data)
+    {
+        // Parse as number
+        $data = LocalizationHelper::normalizeNumber($data);
+
+        // Parse as float
+        $data = floatval($data);
+
+        return $data;
+    }
+
+    private function handleDateField($data)
+    {
+        // Parse date from string
+        $data = DateTimeHelper::formatTimeForDb(DateTimeHelper::fromString($data, craft()->timezone));
+
+        return $data;
+    }
+
+    private function handleSelectField($data, $field)
+    {
+        //get field settings
+        $settings = $field->getFieldType()->getSettings();
+
+        //get field options
+        $options = $settings->getAttribute('options');
+
+        // find matching option label
+        foreach ($options as $option){
+            if ($data == $option['label']){
+                $data = $option['value'];
+                break;
+            }
+        }
+
+        return $data;
+    }
+
+    private function handleMultiSelectField($data, $field)
+    {
+        // Convert to array
+        $data = ArrayHelper::stringToArray($data);
+
+        return $data;
+    }
+
+    private function handleLightSwitchField($data)
+    {
+        // Convert yes/no values to boolean
+        switch ($data) {
+
+            case Craft::t('Yes');
+                $data = true;
+                break;
+
+            case Craft::t('No');
+                $data = false;
+                break;
+
+        }
+
+        return $data;
+    }
+
+    private function handleEventField($data, $subfield)
+    {
+        $firstKey = stristr($subfield, '[startDate]') ? 'startDate' : 'endDate';
+        $secondKey = stristr($subfield, '[date]') ? 'date' : 'time';
+        $fieldData = array($firstKey => array($secondKey => $data));
+
+        return $fieldData;
     }
 
     /**

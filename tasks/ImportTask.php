@@ -91,7 +91,10 @@ class ImportTask extends BaseTask
         }
 
         // Open file
-        $data = craft()->import->data($settings->file);
+        $data = craft()->import->data($settings->file, false);
+
+	    // Get row headings
+        $headings = array_shift($data);
 
         // On start
         if (!$step) {
@@ -103,9 +106,11 @@ class ImportTask extends BaseTask
 
         // Check if row exists
         if (isset($data[$step])) {
+	        // Format row
+            $row = array_combine($headings, $data[$step]);
 
             // Import row
-            craft()->import->row($step, $data[$step], $settings);
+            craft()->import->row($step, $row, $settings);
         }
 
         // When finished

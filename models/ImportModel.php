@@ -19,6 +19,7 @@ class ImportModel extends BaseModel
      * Filetypes.
      */
     const TypeCSV     = 'text/csv';
+	const TypeCSVX    = 'text/x-comma-separated-values';
     const TypeCSVWin  = 'text/comma-separated-values';
     const TypeCSVIE   = 'text/plain';
     const TypeCSVApp  = 'application/csv';
@@ -64,6 +65,11 @@ class ImportModel extends BaseModel
     const FieldTypeLightSwitch  = 'Lightswitch';
 
     /**
+     * Custom Fieldtypes
+     */
+	const FieldTypeEventData    = 'Calendars_EventData';
+
+    /**
      * Delimiters.
      */
     const DelimiterSemicolon = ';';
@@ -83,6 +89,7 @@ class ImportModel extends BaseModel
                 'label' => Craft::t('Filetype'),
                 'values' => array(
                     self::TypeCSV,
+	                self::TypeCSVX,
                     self::TypeCSVWin,
                     self::TypeCSVIE,
                     self::TypeCSVApp,

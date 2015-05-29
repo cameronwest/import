@@ -37,6 +37,7 @@ $(function() {
     if($('.mapper select').length) {
     
         // Make sure each field gets mapped once
+        /* NOPE! I'm gonna append fields together
         $(document).on('change', '.mapper select', function() {
         
             // Disable chosen option for all mapper fields
@@ -51,6 +52,7 @@ $(function() {
             });
             
         });
+        */
         
         // Trigger on load also
         $('.mapper select').trigger('change');
